@@ -74,6 +74,8 @@ services:
       # ClickUp
       CLICKUP_API_TOKEN: ${CLICKUP_API_TOKEN:-}
       CLICKUP_LIST_ID: ${CLICKUP_LIST_ID:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      EVOLINK_API_KEY: ${EVOLINK_API_KEY:-}
 
     # ── Gateway command ──────────────────────────
     command:
