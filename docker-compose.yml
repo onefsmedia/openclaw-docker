@@ -83,7 +83,7 @@ services:
       - "--port"
       - "9090"
       - "--auth"
-      - "trusted-proxy"
+      - "token"
       - "--allow-unconfigured"
 
     # ── Resource limits ──────────────────────────
