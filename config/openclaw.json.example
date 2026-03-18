@@ -1,0 +1,51 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.13"
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/<choose-a-model-id>"
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "open",
+      "allowFrom": ["*"],
+      "groupPolicy": "open",
+      "debounceMs": 0,
+      "mediaMaxMb": 50
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "controlUi": {
+      "allowedOrigins": ["https://<your-domain>"],
+      "allowInsecureAuth": true
+    },
+    "auth": {
+      "mode": "token"
+    },
+    "trustedProxies": [
+      "172.19.0.0/16",
+      "172.18.0.0/16",
+      "127.0.0.1"
+    ]
+  },
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "whatsapp": {
+        "enabled": true
+      }
+    }
+  }
+}

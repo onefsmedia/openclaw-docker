@@ -1,6 +1,6 @@
 # OpenClaw Docker
 
-A production-ready Docker deployment for [OpenClaw](https://openclaw.ai) — an AI agent gateway with WhatsApp integration, Google Sheets sync, and ClickUp task automation. Designed to run on a VPS with a subdomain and automatic Let's Encrypt TLS via Caddy.
+A production-ready Docker deployment for [OpenClaw](https://openclaw.ai) — an AI agent gateway with WhatsApp integration, Google Sheets sync, and ClickUp task automation. Runs on a VPS behind host nginx with Let's Encrypt TLS via certbot.
 
 ---
 
@@ -8,20 +8,21 @@ A production-ready Docker deployment for [OpenClaw](https://openclaw.ai) — an 
 
 1. [Architecture Overview](#architecture-overview)
 2. [Repository Structure](#repository-structure)
-3. [Services](#services)
-4. [Prerequisites](#prerequisites)
-5. [VPS Deployment](#vps-deployment)
-6. [Environment Variables](#environment-variables)
-7. [openclaw.json — Gateway Configuration](#openclawjson--gateway-configuration)
-8. [WhatsApp Channel Setup](#whatsapp-channel-setup)
-9. [Agents](#agents)
-10. [Skills — whatsapp-data-capture](#skills--whatsapp-data-capture)
-11. [ClickUp Integration](#clickup-integration)
-12. [Google Sheets Integration](#google-sheets-integration)
-13. [Mission Control Dashboard](#mission-control-dashboard)
-14. [Watchdog Script](#watchdog-script)
-15. [Updating](#updating)
-16. [Troubleshooting](#troubleshooting)
+3. [Prerequisites](#prerequisites)
+4. [VPS Deployment](#vps-deployment)
+5. [Environment Variables](#environment-variables)
+6. [openclaw.json — Gateway Configuration](#openclawjson--gateway-configuration)
+7. [AI Model Selection](#ai-model-selection)
+8. [OpenRouter Auth Profiles](#openrouter-auth-profiles)
+9. [WhatsApp Channel Setup](#whatsapp-channel-setup)
+10. [Agents](#agents)
+11. [Skills — whatsapp-data-capture](#skills--whatsapp-data-capture)
+12. [ClickUp Integration](#clickup-integration)
+13. [Google Sheets Integration](#google-sheets-integration)
+14. [Mission Control Dashboard](#mission-control-dashboard)
+15. [Watchdog Script](#watchdog-script)
+16. [Updating](#updating)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -31,16 +32,16 @@ A production-ready Docker deployment for [OpenClaw](https://openclaw.ai) — an 
 Internet
     │
     ▼
-Caddy (TLS termination — Let's Encrypt via subdomain)
- ├── :443   → Studio (Next.js web dashboard)
- └── :9443  → Gateway (OpenClaw API + WebSocket)
+nginx (TLS termination — Let's Encrypt via certbot)
+ ├── :80    → 301 redirect to HTTPS
+ ├── :443   → Gateway (OpenClaw API + WebSocket + Control UI)
+ └── :9443  → Gateway (alternate port, same upstream)
                 │
                 ├── WhatsApp Plugin (Baileys — multi-device)
                 │       └── Inbound messages → Agent routing
                 │
                 └── Agent Runtime
-                        ├── main agent  ← receives all WhatsApp DMs & groups
-                        └── test-agent  ← isolated sandbox
+                        └── main agent  ← receives all WhatsApp DMs & groups
                                 │
                                 └── Skills
                                       └── whatsapp-data-capture
@@ -48,7 +49,10 @@ Caddy (TLS termination — Let's Encrypt via subdomain)
                                             └── push_to_clickup.py → ClickUp REST API
 ```
 
-All services run inside an isolated Docker bridge network (`openclaw-net`). The gateway and studio are hardened with non-root users, dropped capabilities, and read-only root filesystems.
+- TLS is handled by host **nginx** (certbot Let's Encrypt), not by the container.
+- The gateway container binds to `127.0.0.1:9090` only — never exposed directly to the internet.
+- The Control UI is served by the gateway itself at `https://<domain>/`.
+- No Studio container — agent management is done via the gateway Control UI or CLI.
 
 ---
 
@@ -56,18 +60,21 @@ All services run inside an isolated Docker bridge network (`openclaw-net`). The 
 
 ```
 openclaw-docker/
-├── Dockerfile                  # Gateway image (Node 22 + Python 3 + gog + wacli)
-├── docker-compose.yml          # All services: gateway, studio, caddy
-├── Caddyfile                   # Reverse proxy — auto TLS for subdomain
-├── entrypoint.sh               # Container startup + first-run bootstrap
-├── .env.example                # Template for all required environment variables
-├── .dockerignore               # Excludes config/ and workspace/ from build context
+├── Dockerfile                   # Gateway image (Node 22 + Python 3 + gog + wacli)
+├── docker-compose.yml           # Gateway service only
+├── entrypoint.sh                # Container startup + first-run bootstrap
+├── .env.example                 # Template for all required environment variables
+├── .dockerignore                # Excludes config/ and workspace/ from build context
+│
+├── nginx/
+│   └── openclaw.conf                  # nginx reverse-proxy example config
 │
 ├── dashboard/
-│   └── index.html              # Mission Control — real-time gateway status UI
+│   └── index.html               # Mission Control — real-time gateway status UI
 │
-└── config/                     # Runtime state (gitignored except skills/scripts)
-    ├── openclaw.json            # Main gateway + agent + channel configuration
+└── config/                      # Runtime state (gitignored except example files)
+    ├── openclaw.json.example    # Gateway config template (copy to openclaw.json)
+    ├── auth-profiles.json.example  # OpenRouter API key template
     ├── agents/                  # Per-agent auth and session data (gitignored)
     ├── credentials/             # WhatsApp E2E keys (gitignored)
     ├── identity/                # Device identity (gitignored)
@@ -75,7 +82,6 @@ openclaw-docker/
     ├── memory/                  # Agent memory SQLite database (gitignored)
     ├── logs/                    # Gateway, error, and watchdog logs (gitignored)
     ├── media/inbound/           # Received media files (gitignored)
-    ├── cron/jobs.json           # Scheduled job definitions
     ├── completions/             # Shell completions for the openclaw CLI
     ├── canvas/index.html        # Canvas UI served by the gateway
     ├── scripts/
@@ -86,56 +92,24 @@ openclaw-docker/
             ├── SETUP.md         # One-time setup instructions
             ├── DOCUMENTATION.md # Full user guide
             ├── references/
-            │   ├── clickup_api.md    # ClickUp REST API reference
-            │   └── data_schema.md   # Extracted field definitions
+            │   ├── clickup_api.md
+            │   └── data_schema.md
             └── scripts/
-                ├── push_to_sheets.py   # Appends rows to Google Sheets
-                └── push_to_clickup.py  # Creates tasks via ClickUp API
+                ├── push_to_sheets.py
+                └── push_to_clickup.py
 ```
-
----
-
-## Services
-
-### `openclaw` — Gateway
-
-The core AI agent runtime. Handles all incoming WhatsApp messages, routes them to the configured agent, executes skills, and exposes a REST/WebSocket API on port `9090`.
-
-- **Image:** Built from `Dockerfile` (Node 22 slim + Python 3 + `gog` + `wacli`)
-- **Internal port:** `9090`
-- **State directory:** `./config` mounted at `/data`
-- **User:** `node` (uid 1000) — non-root
-- **Memory limit:** 2 GB / 1 CPU
-
-### `studio` — Web Dashboard
-
-The OpenClaw Studio UI — a Next.js app for managing agents, viewing conversations, handling approvals, and configuring the gateway from a browser.
-
-- **Image:** Built from `~/openclaw-studio` (separate repo)
-- **Internal port:** `3000`
-- **User:** uid 1000 — non-root
-- **Memory limit:** 1 GB / 1 CPU
-
-### `caddy` — Reverse Proxy
-
-Caddy handles TLS termination using automatic Let's Encrypt certificates. It reads the subdomain from the `DOMAIN` environment variable.
-
-- **Image:** `caddy:2-alpine`
-- **Ports:** `80` (redirect to HTTPS), `443` (Studio), `9443` (Gateway WSS)
-- **Routes:**
-  - `https://{DOMAIN}` → Studio on port 3000
-  - `https://{DOMAIN}:9443` → Gateway on port 9090
-  - `https://{DOMAIN}:9443/dashboard/` → Mission Control static dashboard
 
 ---
 
 ## Prerequisites
 
-On the **VPS**:
+On the **VPS** (Ubuntu 24.04 recommended):
 - Docker Engine ≥ 24 and Docker Compose V2
+- nginx installed (`apt install nginx`)
+- certbot installed (`apt install certbot python3-certbot-nginx`)
 - Ports `80`, `443`, `9443` open in your firewall
-- A subdomain DNS `A` record pointing to the server's public IP (e.g. `app.yourdomain.com`)
-- The `openclaw-studio` source cloned alongside this repo (or set `OPENCLAW_STUDIO_DIR` in `.env`)
+- A subdomain DNS `A` record pointing to the server's public IP
+- An [OpenRouter](https://openrouter.ai) account and API key
 
 On your **local machine** (for pairing WhatsApp):
 - `openclaw` CLI installed (`npm install -g openclaw`)
@@ -144,16 +118,11 @@ On your **local machine** (for pairing WhatsApp):
 
 ## VPS Deployment
 
-### 1. Clone the repos
+### 1. Clone the repo
 
 ```bash
-git clone https://github.com/onefsmedia/openclaw-docker.git
-cd openclaw-docker
-```
-
-If you also need to build Studio locally:
-```bash
-git clone https://github.com/onefsmedia/openclaw-studio.git ~/openclaw-studio
+git clone https://github.com/onefsmedia/openclaw-docker.git /opt/openclaw-docker
+cd /opt/openclaw-docker
 ```
 
 ### 2. Create your `.env` file
@@ -163,53 +132,98 @@ cp .env.example .env
 nano .env
 ```
 
-Fill in every value — at minimum `DOMAIN`, `OPENCLAW_GATEWAY_TOKEN`, and `STUDIO_ACCESS_TOKEN`. See [Environment Variables](#environment-variables) for details.
+Fill in at minimum `DOMAIN`, `OPENCLAW_GATEWAY_TOKEN`, and `OPENROUTER_API_KEY`.
 
-### 3. Point DNS
+### 3. Create the gateway config
 
-Create an `A` record for your subdomain pointing to the VPS public IP **before** starting Caddy, so Let's Encrypt can issue the certificate.
+```bash
+cp config/openclaw.json.example config/openclaw.json
+nano config/openclaw.json
+```
 
-### 4. Start all services
+Replace `<your-domain>` in `allowedOrigins` with your actual subdomain.
+
+### 4. Set correct permissions
+
+The container runs as uid 1000. Set ownership before starting:
+
+```bash
+mkdir -p /opt/openclaw-docker/config
+chown -R 1000:1000 /opt/openclaw-docker/config
+```
+
+### 5. Build and start the gateway
 
 ```bash
 docker compose up -d --build
-```
-
-Caddy will automatically obtain a TLS certificate for your subdomain on first start (requires port 80 to be reachable for the ACME HTTP-01 challenge).
-
-### 5. Verify
-
-```bash
-docker compose ps          # all three services should be Up
-docker compose logs caddy  # watch for "certificate obtained successfully"
+docker compose ps          # status should be "healthy"
 docker compose logs openclaw --tail 50
 ```
 
-Visit `https://your-subdomain.com` — the Studio login screen should appear.
+### 6. Issue a TLS certificate with certbot
 
-### 6. Pair WhatsApp
+```bash
+certbot --nginx -d <your-subdomain.yourdomain.com>
+```
+
+Certbot automatically modifies the nginx config to add SSL. Alternatively, set up the config manually using the template in `nginx/`.
+
+### 7. Configure nginx
+
+Copy the nginx example config into place:
+
+```bash
+cp nginx/openclaw.conf \
+   /etc/nginx/sites-available/<your-domain>.conf
+
+# Edit: replace all <domain> placeholders with your actual domain
+nano /etc/nginx/sites-available/<your-domain>.conf
+
+ln -s /etc/nginx/sites-available/<your-domain>.conf \
+      /etc/nginx/sites-enabled/
+
+nginx -t && systemctl reload nginx
+```
+
+### 8. Set up the OpenRouter API key
+
+```bash
+mkdir -p /opt/openclaw-docker/config/agents/main/agent
+cp config/auth-profiles.json.example \
+   config/agents/main/agent/auth-profiles.json
+
+# Replace the placeholder with your real OpenRouter API key
+nano config/agents/main/agent/auth-profiles.json
+
+chown -R 1000:1000 /opt/openclaw-docker/config/agents
+docker compose restart
+```
+
+### 9. Pair WhatsApp
 
 ```bash
 docker exec -it openclaw-gateway openclaw gateway pair
 ```
 
-Scan the printed QR code with your WhatsApp phone → **Linked Devices → Link a Device**.
+Scan the QR code with your WhatsApp phone:  
+**Settings → Linked Devices → Link a Device**
 
-After pairing, the gateway is fully operational and all inbound WhatsApp messages are routed to the configured agent.
+### 10. Verify
+
+Open `https://<your-domain>/` — the Control UI should load. Enter your `OPENCLAW_GATEWAY_TOKEN` when prompted.
 
 ---
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and fill in the values below.
+Copy `.env.example` to `.env` and fill in the values.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DOMAIN` | **Yes** | Your subdomain (e.g. `app.yourdomain.com`). Caddy uses this for TLS. |
-| `OPENCLAW_GATEWAY_TOKEN` | **Yes** | Auth token for the gateway API. Generate with `openssl rand -hex 24`. Must match `gateway.auth.token` in `openclaw.json`. |
-| `STUDIO_ACCESS_TOKEN` | **Yes** | Protects the Studio UI when bound to `0.0.0.0`. Generate with `openssl rand -hex 24`. |
-| `OPENCLAW_STUDIO_DIR` | No | Path to the openclaw-studio source. Default: `~/openclaw-studio`. |
-| `OPENCLAW_GATEWAY_URL` | No | WebSocket URL the Studio browser uses to reach the gateway. Default: `wss://${DOMAIN}:9443`. |
+| `DOMAIN` | **Yes** | Your subdomain (e.g. `app.yourdomain.com`). Must match your DNS A record. |
+| `OPENCLAW_GATEWAY_TOKEN` | **Yes** | Auth token for the gateway API and Control UI. Generate with `openssl rand -hex 24`. |
+| `OPENROUTER_API_KEY` | **Yes** | API key from [openrouter.ai/keys](https://openrouter.ai/keys). Used in `auth-profiles.json`. |
+| `OPENCLAW_GATEWAY_PORT` | No | Internal gateway port. Default: `9090`. |
 | `GOOGLE_SHEET_ID` | No | Google Sheet ID for the WhatsApp data capture skill. |
 | `GOOGLE_SHEET_TAB` | No | Tab name in the Sheet. Default: `WhatsApp Data`. |
 | `GOG_ACCOUNT` | No | Gmail address for the `gog` CLI (avoids `--account` flag). |
@@ -222,7 +236,7 @@ Copy `.env.example` to `.env` and fill in the values below.
 
 ## openclaw.json — Gateway Configuration
 
-`config/openclaw.json` is the main configuration file. It is created automatically on first container start by `entrypoint.sh` if missing. Edit it to customise agents, channels, and gateway behaviour.
+`config/openclaw.json` is the main gateway config file. Copy from `config/openclaw.json.example` and adjust for your deployment.
 
 Key sections:
 
@@ -231,23 +245,12 @@ Key sections:
 ```json
 "agents": {
   "defaults": {
-    "model": { "primary": "openrouter/qwen/qwen3-coder:free" },
-    "compaction": { "mode": "safeguard" }
-  },
-  "list": [
-    { "id": "main" },
-    {
-      "id": "test-agent",
-      "name": "Test Agent",
-      "tools": {
-        "alsoAllow": ["group:runtime", "group:web", "group:fs"]
-      }
-    }
-  ]
+    "model": { "primary": "openrouter/<model-id>" }
+  }
 }
 ```
 
-Each agent has an `id`. The `main` agent is the default and handles all whatsapp messages unless a binding routes to another agent.
+Model is an OpenRouter model ID string. See [AI Model Selection](#ai-model-selection) below.
 
 ### `channels`
 
@@ -259,7 +262,7 @@ Each agent has an `id`. The `main` agent is the default and handles all whatsapp
     "allowFrom": ["*"],
     "groupPolicy": "open",
     "debounceMs": 0,
-    "mediaMaxMb": 1
+    "mediaMaxMb": 50
   }
 }
 ```
@@ -273,30 +276,102 @@ Each agent has an `id`. The `main` agent is the default and handles all whatsapp
 ```json
 "gateway": {
   "mode": "local",
-  "auth": {
-    "mode": "trusted-proxy",
-    "token": "<your-token>",
-    "trustedProxy": { "userHeader": "X-Remote-User" }
+  "controlUi": {
+    "allowedOrigins": ["https://<your-domain>"],
+    "allowInsecureAuth": true
   },
-  "trustedProxies": ["172.24.0.0/16"]
+  "auth": { "mode": "token" },
+  "trustedProxies": ["172.19.0.0/16", "172.18.0.0/16", "127.0.0.1"]
 }
 ```
 
-`mode: "trusted-proxy"` means Caddy injects the `X-Remote-User` header — no bearer token needed from the browser side.
+- `auth.mode: "token"` — all API calls require `Authorization: Bearer <token>` header
+- `trustedProxies` — Docker bridge network CIDRs + localhost (for nginx)
+- `allowedOrigins` — must include your HTTPS domain for the Control UI to load
 
-### `bindings`
+---
+
+## AI Model Selection
+
+The model is set in `config/openclaw.json` under `agents.defaults.model.primary`.  
+Format: `openrouter/<provider>/<model-slug>` or `openrouter/<model-slug>`.
+
+### Current production model
 
 ```json
-"bindings": [
-  {
-    "type": "route",
-    "agentId": "main",
-    "match": { "channel": "whatsapp" }
-  }
-]
+"model": { "primary": "openrouter/nvidia/nemotron-3-super-120b-a12b:free" }
 ```
 
-All whatsapp messages are routed to the `main` agent. You can add additional bindings to route specific phone numbers or groups to different agents.
+This model is **completely free** ($0 per token), with 262K context window.
+
+### Other recommended free models on OpenRouter
+
+| Model ID | Context | Notes |
+|----------|---------|-------|
+| `openrouter/nvidia/nemotron-3-super-120b-a12b:free` | 262K | Current production — large, capable |
+| `openrouter/microsoft/mai-ds-r1:free` | 163K | Strong reasoning |
+| `openrouter/deepseek/deepseek-r1:free` | 164K | Excellent reasoning |
+| `openrouter/qwen/qwen3-235b-a22b:free` | 131K | High quality |
+| `openrouter/meta-llama/llama-4-maverick:free` | 1M | Massive context |
+
+Browse all models: [openrouter.ai/models](https://openrouter.ai/models)
+
+### Applying a model change
+
+Edit `config/openclaw.json` then:
+
+```bash
+docker compose restart
+```
+
+> **Important:** The model string must exactly match the OpenRouter slug. An invalid model ID returns a `400` error.
+
+---
+
+## OpenRouter Auth Profiles
+
+The gateway reads API keys from `config/agents/main/agent/auth-profiles.json`.  
+This file is **gitignored** — it must be created manually on each server.
+
+### Format
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "openrouter-default": {
+      "type": "api_key",
+      "provider": "openrouter",
+      "key": "<sk-or-v1-your-openrouter-api-key>"
+    }
+  }
+}
+```
+
+See `config/auth-profiles.json.example` for the full template.
+
+### Setup commands
+
+```bash
+mkdir -p /opt/openclaw-docker/config/agents/main/agent
+cp config/auth-profiles.json.example \
+   /opt/openclaw-docker/config/agents/main/agent/auth-profiles.json
+nano /opt/openclaw-docker/config/agents/main/agent/auth-profiles.json
+# Paste your OpenRouter API key
+
+# Fix ownership (container runs as uid 1000)
+chown -R 1000:1000 /opt/openclaw-docker/config/agents
+docker compose restart
+```
+
+### Troubleshooting auth errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `No API key found for provider openrouter` | `auth-profiles.json` missing or wrong path | Place file at `config/agents/main/agent/auth-profiles.json` |
+| `EACCES permission denied` | File owned by root, container is uid 1000 | `chown -R 1000:1000 config/agents` |
+| `400 Invalid model` | Model ID doesn't exist on OpenRouter | Verify exact slug at openrouter.ai/models |
+| `402 billing error` | OpenRouter credits exhausted | Switch to a `:free` model or top up credits |
 
 ---
 
@@ -305,7 +380,6 @@ All whatsapp messages are routed to the `main` agent. You can add additional bin
 ### First-time pairing
 
 ```bash
-# Inside the running container
 docker exec -it openclaw-gateway openclaw gateway pair
 ```
 
@@ -323,9 +397,14 @@ Expected output:
 whatsapp  connected  +237XXXXXXXXX
 ```
 
-### Re-pair after logout
+### List and approve devices
 
-If rejected or logged out, unpair first then re-pair:
+```bash
+docker exec -it openclaw-gateway openclaw devices list
+docker exec -it openclaw-gateway openclaw devices approve <device-id>
+```
+
+### Re-pair after logout
 
 ```bash
 docker exec -it openclaw-gateway openclaw gateway unpair
@@ -344,13 +423,12 @@ In `config/openclaw.json` under `channels.whatsapp`:
 | `groupPolicy` | `open` / `invited` / `deny` | Group message handling |
 | `debounceMs` | number | Wait N ms for follow-up messages before processing (0 = instant) |
 | `mediaMaxMb` | number | Maximum incoming media file size to process |
-| `configWrites` | bool | Allow the agent to write back to this config |
 
 ---
 
 ## Agents
 
-An **agent** in OpenClaw is an autonomous AI worker with its own workspace, memory, tool permissions, and skills. Each agent processes messages routed to it, uses its configured LLM, and can execute skills.
+An **agent** in OpenClaw is an autonomous AI worker with its own workspace, memory, tool permissions, and skills. The `main` agent handles all WhatsApp messages by default.
 
 ### Agent directory layout (inside the container at `/data`)
 
@@ -358,66 +436,24 @@ An **agent** in OpenClaw is an autonomous AI worker with its own workspace, memo
 /data/
 ├── agents/
 │   └── main/
-│       ├── agent/
-│       │   ├── models.json       # Override model for this agent
-│       │   └── auth.json         # API keys for this agent's LLM calls
-│       └── sessions/
-│           └── sessions.json     # Conversation session index
-├── workspace/                    # Agent's working directory for file operations
+│       └── agent/
+│           ├── auth-profiles.json   # OpenRouter API key (gitignored)
+│           └── models.json          # Optional per-agent model override
+├── workspace/                       # Agent's working directory for file operations
 └── skills/                       # Skill definitions loaded by agents
     └── whatsapp-data-capture/
         └── SKILL.md              # The skill prompt loaded into agent context
 ```
 
-### Creating a new agent
-
-Add an entry to `agents.list` in `openclaw.json`:
-
-```json
-{
-  "id": "sales-agent",
-  "name": "Sales Agent",
-  "tools": {
-    "alsoAllow": ["group:fs", "group:web"],
-    "deny": ["tool:exec"]
-  }
-}
-```
-
-Then add a binding to route specific messages to it:
-
-```json
-{
-  "type": "route",
-  "agentId": "sales-agent",
-  "match": {
-    "channel": "whatsapp",
-    "from": "+2376XXXXXXXX"
-  }
-}
-```
-
 ### Changing the LLM model
 
-Edit `agents.defaults.model.primary` in `openclaw.json`. The value is an OpenRouter model string:
+Edit `agents.defaults.model.primary` in `config/openclaw.json`:
 
 ```json
-"model": { "primary": "openrouter/anthropic/claude-3.5-sonnet" }
+"model": { "primary": "openrouter/nvidia/nemotron-3-super-120b-a12b:free" }
 ```
 
-Browse available models at [openrouter.ai/models](https://openrouter.ai/models).
-
-### Agent memory
-
-Each agent has persistent memory stored in `/data/memory/main.sqlite`. Memory search can be enabled per agent:
-
-```json
-"agents": {
-  "defaults": {
-    "memorySearch": { "enabled": true }
-  }
-}
-```
+Then restart: `docker compose restart`
 
 ---
 
@@ -432,17 +468,15 @@ The `whatsapp-data-capture` skill listens for WhatsApp messages containing struc
 
 ### How it triggers
 
-The agent activates the skill automatically when it detects:
+The agent activates the skill when it detects:
 - Monetary amounts (invoices, payments, sales figures)
 - Order or delivery confirmations
 - Task or follow-up requests
 - Meeting or appointment requests
-- Lead or contact enquiries
 
-Or when you explicitly say phrases like:
+Or when you explicitly say:
 - `"Log this to the sheet"`
 - `"Create a task from this message"`
-- `"Capture this from WhatsApp"`
 - `"Save to ClickUp"`
 
 ### Data fields extracted per message
@@ -471,118 +505,14 @@ CLICKUP_API_TOKEN=pk_...
 CLICKUP_LIST_ID=<your-list-id>
 ```
 
-Install `gog` inside the container (or add to `Dockerfile`):
-```bash
-docker exec -it openclaw-gateway pip3 install gog  # or via brew during local setup
-```
-
-Authenticate `gog` once:
-```bash
-gog auth credentials /path/to/client_secret.json
-gog auth add you@gmail.com --services sheets
-```
-
-### Manual script usage
-
-**Append to Google Sheets:**
-```bash
-python3 /data/skills/whatsapp-data-capture/scripts/push_to_sheets.py \
-  --data '{
-    "rows": [[
-      "2026-03-18", "+237640087638", "Alice Kamga",
-      "payment", "5000 XAF", "Send receipt", "2026-03-20",
-      "Hi, I have made the payment for order 42", "Regular customer"
-    ]]
-  }'
-```
-
-**Create a ClickUp task:**
-```bash
-python3 /data/skills/whatsapp-data-capture/scripts/push_to_clickup.py \
-  --data '{
-    "name": "[invoice] Send receipt — Alice Kamga",
-    "description": "WhatsApp from +237640087638 on 2026-03-18:\nPayment confirmed 5000 XAF for order #42.",
-    "due_date": 1742083200000,
-    "priority": 3,
-    "tags": ["whatsapp", "invoice"]
-  }'
-```
-
 ---
 
 ## ClickUp Integration
 
-### Authentication
-
-ClickUp uses personal API tokens. No OAuth flow is required.
-
-1. Log in to ClickUp
-2. Go to **Settings → Apps → API Token**
-3. Copy the token (format: `pk_XXXXX_...`)
-4. Set it in `.env`: `CLICKUP_API_TOKEN=pk_...`
-
-### Finding your List ID
-
-1. Open the list in ClickUp where tasks should land
-2. The URL will look like: `https://app.clickup.com/<workspace>/l/<LIST_ID>/`
-3. Copy the numeric `LIST_ID`
-4. Set it in `.env`: `CLICKUP_LIST_ID=901234567`
-
-### API reference — Create Task
-
-**Endpoint:** `POST https://api.clickup.com/api/v2/list/{list_id}/task`
-
-**Headers:**
-```
-Authorization: pk_...
-Content-Type: application/json
-```
-
-**Body:**
-```json
-{
-  "name": "[invoice] Send receipt — Alice Kamga",
-  "description": "Context from WhatsApp conversation...",
-  "priority": 3,
-  "due_date": 1742083200000,
-  "due_date_time": true,
-  "tags": ["whatsapp", "invoice"],
-  "assignees": [12345678]
-}
-```
-
-**Priority values:**
-
-| Value | Label |
-|-------|-------|
-| `1` | Urgent |
-| `2` | High |
-| `3` | Normal |
-| `4` | Low |
-
-**Converting a date to Unix milliseconds (Python):**
-```python
-import datetime
-dt = datetime.datetime(2026, 3, 20)
-unix_ms = int(dt.timestamp() * 1000)  # e.g. 1742428800000
-```
-
-**Response:**
-```json
-{
-  "id": "abc123xyz",
-  "name": "[invoice] Send receipt — Alice Kamga",
-  "url": "https://app.clickup.com/t/abc123xyz"
-}
-```
-
-### Task naming convention
-
-Tasks created by the skill follow this format:
-```
-[<data_type>] <action_item> — <contact_name>
-```
-Example: `[payment] Send receipt — Alice Kamga`
+1. Log in to ClickUp → **Settings → Apps → API Token** → copy token (`pk_...`)
+2. Set in `.env`: `CLICKUP_API_TOKEN=pk_...`
+3. Get your list's ID from its URL: `/l/<LIST_ID>/`
+4. Set in `.env`: `CLICKUP_LIST_ID=<id>`
 
 ### When tasks are created vs skipped
 
@@ -599,78 +529,48 @@ Example: `[payment] Send receipt — Alice Kamga`
 
 The skill uses the `gog` CLI to write to Google Sheets without requiring a service account.
 
-**Step 1 — Enable the Sheets API in Google Cloud:**
-1. Go to [console.cloud.google.com](https://console.cloud.google.com)
-2. Create or select a project
-3. **APIs & Services → Library** → enable **Google Sheets API**
-4. **APIs & Services → Credentials → Create Credentials → OAuth client ID**
-   - Application type: **Desktop app**
-5. Download `client_secret.json`
+**One-time setup:**
 
-**Step 2 — Authenticate gog:**
 ```bash
+# 1. Enable Google Sheets API in Google Cloud console
+# 2. Create OAuth client ID (Desktop app), download client_secret.json
+
+# 3. Authenticate gog
 gog auth credentials /path/to/client_secret.json
 gog auth add you@gmail.com --services sheets
-gog auth list   # verify account is listed
+
+# 4. Create spreadsheet, rename tab to "WhatsApp Data"
+#    Add headers in row 1: Date | Sender | Contact Name | Data Type |
+#    Amount | Action Item | Due Date | Message Preview | Notes | ClickUp Task ID
 ```
 
-**Step 3 — Create the Google Sheet:**
-1. Create a new spreadsheet
-2. Rename the tab to `WhatsApp Data`
-3. Add these headers in row 1 (A–J):
-
-| A | B | C | D | E | F | G | H | I | J |
-|---|---|---|---|---|---|---|---|---|---|
-| Date | Sender | Contact Name | Data Type | Amount | Action Item | Due Date | Message Preview | Notes | ClickUp Task ID |
-
-4. Copy the Sheet ID from the URL:  
-   `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit`
-
-**Step 4 — Set env vars:**
-```bash
-GOOGLE_SHEET_ID=<paste-here>
+Set in `.env`:
+```
+GOOGLE_SHEET_ID=<id-from-sheet-url>
 GOOGLE_SHEET_TAB=WhatsApp Data
+GOG_ACCOUNT=you@gmail.com
 ```
-
-### How rows are appended
-
-The script calls `gog sheets append` which always **adds new rows** — it never overwrites existing data. Multiple rows from one message are written in a single call.
 
 ---
 
 ## Mission Control Dashboard
 
-A real-time terminal-style status dashboard is served at:
+A real-time status dashboard is served at `https://<your-domain>/dashboard/`.
 
-```
-https://<your-domain>:9443/dashboard/
-```
-
-It displays:
-- Gateway connection status (WebSocket live)
-- Agent list and activity
-- WhatsApp channel health
-- Inbound/outbound message counters
-- Memory and session statistics
-
-The dashboard connects directly to the gateway API using the `OPENCLAW_GATEWAY_TOKEN` — enter it in the token field on first load.
+It displays gateway connection status, agent activity, WhatsApp channel health, and message counters. Enter `OPENCLAW_GATEWAY_TOKEN` when prompted on first load.
 
 ---
 
 ## Watchdog Script
 
-`config/scripts/watchdog.sh` is a shell script that monitors the WhatsApp connection and automatically restarts the gateway if it becomes disconnected.
+`config/scripts/watchdog.sh` monitors the WhatsApp connection and restarts the gateway if disconnected.
 
-It runs as a background loop (every 60 seconds) and:
-1. Checks if the gateway process is running
-2. Polls `openclaw channels status` for WhatsApp connection health
-3. Attempts up to 3 reconnects via `launchctl` (macOS) or Docker restart
-4. Logs all events to `config/logs/watchdog.log`
-
-**To run on the VPS inside the container:**
 ```bash
+# Run inside the container (background)
 docker exec -d openclaw-gateway bash /data/scripts/watchdog.sh
 ```
+
+Logs: `config/logs/watchdog.log`
 
 ---
 
@@ -679,26 +579,25 @@ docker exec -d openclaw-gateway bash /data/scripts/watchdog.sh
 ### Update the gateway image
 
 ```bash
-docker compose pull openclaw     # if using a registry image
-# or rebuild from source:
 docker compose build openclaw --no-cache
 docker compose up -d openclaw
 ```
 
-### Update Studio
+### Update nginx config
+
+Edit the file in `/etc/nginx/sites-available/` then:
 
 ```bash
-cd ~/openclaw-studio
-git pull
-docker compose build studio --no-cache
-docker compose up -d studio
+nginx -t && systemctl reload nginx
 ```
 
-### Update Caddy
+### Renew TLS certificates
+
+Certbot renews automatically via a systemd timer. To renew manually:
 
 ```bash
-docker compose pull caddy
-docker compose up -d caddy
+certbot renew
+systemctl reload nginx
 ```
 
 ---
@@ -717,24 +616,35 @@ docker exec -it openclaw-gateway openclaw gateway pair
 
 - Confirm DNS A record points to the correct VPS IP
 - Confirm port 80 is open (Let's Encrypt HTTP-01 challenge)
-- Check Caddy logs: `docker compose logs caddy`
+- Run: `certbot --nginx -d <your-domain>` and check output
 
-### Studio can't reach the gateway
+### No API key found for provider openrouter
 
-- Check `OPENCLAW_GATEWAY_URL` in `.env` — should be `wss://<your-domain>:9443`
-- Check `OPENCLAW_GATEWAY_TOKEN` matches `gateway.auth.token` in `openclaw.json`
+- Ensure `config/agents/main/agent/auth-profiles.json` exists with the correct format
+- Check file ownership: `ls -la config/agents/main/agent/`
+- Fix: `chown -R 1000:1000 /opt/openclaw-docker/config/agents`
+
+### 400 Invalid model
+
+The model ID in `openclaw.json` does not match exactly. Verify at [openrouter.ai/models](https://openrouter.ai/models) and update:
+
+```json
+"primary": "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+```
+
+### 402 billing error
+
+OpenRouter credits exhausted. Switch to a free model:
+
+```json
+"primary": "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+```
 
 ### 401 errors on gateway API
 
-The token in `.env` (`OPENCLAW_GATEWAY_TOKEN`) must match the value in `config/openclaw.json` under `gateway.auth.token`.
+The `OPENCLAW_GATEWAY_TOKEN` in `.env` must match the token the gateway was started with. Regenerate with `openssl rand -hex 24`, update `.env` and restart.
 
 ### ClickUp tasks not created
-
-```bash
-# Test the script directly:
-docker exec -it openclaw-gateway python3 /data/skills/whatsapp-data-capture/scripts/push_to_clickup.py \
-  --data '{"name":"test task","priority":4}'
-```
 
 Common causes:
 - `CLICKUP_API_TOKEN` not set or expired → re-copy from [app.clickup.com/settings/apps](https://app.clickup.com/settings/apps)
@@ -750,24 +660,18 @@ docker exec -it openclaw-gateway gog auth add you@gmail.com --services sheets
 
 Check `GOOGLE_SHEET_ID` is the correct ID from the spreadsheet URL.
 
-### Gateway out of memory
-
-Increase the memory limit in `docker-compose.yml`:
-```yaml
-deploy:
-  resources:
-    limits:
-      memory: 4g
-```
-
-Then restart: `docker compose up -d openclaw`
-
 ### View live logs
 
 ```bash
-docker compose logs -f openclaw       # gateway logs
-docker compose logs -f studio         # studio logs
-docker compose logs -f caddy          # caddy/TLS logs
-tail -f config/logs/gateway.log       # direct gateway log file
-tail -f config/logs/watchdog.log      # watchdog events
+docker compose logs -f openclaw         # gateway logs
+tail -f config/logs/gateway.log         # direct gateway log
+tail -f config/logs/watchdog.log        # watchdog events
+```
+
+### Check nginx proxy
+
+```bash
+nginx -t                                # test config syntax
+systemctl status nginx                  # service status
+tail -f /var/log/nginx/error.log        # nginx errors
 ```
