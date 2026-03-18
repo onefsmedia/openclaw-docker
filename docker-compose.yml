@@ -39,13 +39,13 @@ services:
     networks:
       - openclaw-net
 
-    # ── Restart policy ──────────────────────────
     restart: unless-stopped
 
     # ── Port mapping ────────────────────────────
-    # Bound to 0.0.0.0 — accessible from LAN. Auth required (token).
+    # Bound to 0.0.0.0 — accessible from host. Auth required (token).
+    # nginx proxies WSS traffic on port 9443 to this port.
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
 
     # ── Volumes ─────────────────────────────────
     # ./config    → OpenClaw state dir: openclaw.json, credentials, skills, memory
@@ -132,8 +132,9 @@ services:
     restart: unless-stopped
 
     # ── Port mapping ────────────────────────────
+    # Bound to 127.0.0.1 only — nginx proxies HTTPS traffic to this port
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
 
     # ── Volumes ─────────────────────────────────
     volumes:
@@ -184,41 +185,10 @@ services:
         max-size: "20m"
         max-file: "5"
 
-  # ── Caddy (TLS reverse proxy) ───────────────────────────────────────────────
-  caddy:
-    image: caddy:2-alpine
-    container_name: openclaw-caddy
-    networks:
-      - openclaw-net
-    ports:
-      - "80:80"       # HTTP → HTTPS redirect
-      - "443:443"     # Studio HTTPS (standard port)
-      - "9443:9443"   # Gateway HTTPS/WSS
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./dashboard:/srv/dashboard:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    environment:
-      DOMAIN: ${DOMAIN}
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
-    depends_on:
-      - openclaw
-      - studio
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "3"
-
 
 
 # ── Named volumes ─────────────────────────────────────────────────────────────
 volumes:
   studio-data:
-  caddy-data:
-  caddy-config:
 
 
