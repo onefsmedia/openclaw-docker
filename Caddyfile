@@ -1,0 +1,28 @@
+# OpenClaw — Caddyfile for VPS deployment
+# Set DOMAIN in your .env file (e.g. DOMAIN=app.yourdomain.com).
+# Caddy automatically obtains and renews a Let's Encrypt TLS certificate.
+
+# HTTP → HTTPS redirect (handled automatically by Caddy for named hosts)
+
+# Studio — https://{$DOMAIN} (port 443)
+{$DOMAIN} {
+    reverse_proxy studio:3000
+}
+
+# Gateway HTTPS/WSS — {$DOMAIN}:9443
+{$DOMAIN}:9443 {
+    # Mission Control dashboard
+    handle_path /dashboard/* {
+        root * /srv/dashboard
+        file_server
+    }
+
+    # Everything else → gateway
+    handle {
+        reverse_proxy openclaw:9090 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Remote-User "operator"
+        }
+    }
+}

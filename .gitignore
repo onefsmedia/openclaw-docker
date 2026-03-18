@@ -1,0 +1,64 @@
+# ── Runtime credentials & secrets ────────────────────────────────────────────
+# WhatsApp E2E encryption keys — NEVER commit these
+config/credentials/
+
+# Agent auth tokens and session data
+config/auth-profiles.json
+config/agents/
+
+# Paired / pending device state
+config/devices/
+
+# Device identity
+config/identity/
+
+# ── Runtime state ─────────────────────────────────────────────────────────────
+config/exec-approvals.json
+config/update-check.json
+config/openclaw-studio-cli/
+
+# Main config (auto-created on first start via entrypoint.sh bootstrap)
+# Contains your agent settings, tokens, and channel config — keep it local
+config/openclaw.json
+config/openclaw.json.bak
+config/openclaw.json.bak.*
+
+# Cron backup
+config/cron/jobs.json.bak
+
+# Delivery queue temp files
+config/delivery-queue/
+
+# ── Databases ─────────────────────────────────────────────────────────────────
+config/memory/
+config/openclaw-studio/
+*.sqlite
+*.db
+*.db-shm
+*.db-wal
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+config/logs/
+
+# ── Inbound media ─────────────────────────────────────────────────────────────
+config/media/
+
+# ── Agent workspaces (has its own .git) ───────────────────────────────────────
+config/workspace/
+workspace/
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Environment secrets ───────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── Temp files ────────────────────────────────────────────────────────────────
+*.tmp

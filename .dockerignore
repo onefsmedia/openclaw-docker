@@ -1,0 +1,6 @@
+.env
+*.log
+
+# Volume directories — never sent to build context
+config/
+workspace/

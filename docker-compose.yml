@@ -1,0 +1,224 @@
+# ── OpenClaw Docker Compose — VPS Deployment ────────────────────────────────
+# Proxy   : Caddy (auto Let's Encrypt TLS via DOMAIN in .env)
+# User    : 1000:1000 (non-root) on both services
+# Security: no-new-privileges, all caps dropped, read-only root filesystem
+# Network : isolated bridge (openclaw-net) — outbound OK
+# Limits  : 2 GB RAM · 1 CPU (gateway), 1 GB RAM · 1 CPU (studio)
+# Volumes : ./config (OpenClaw state), ./workspace (agent workspaces)
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  openclaw-net:
+    driver: bridge
+    # Outbound internet enabled (needed for AI API calls).
+    # Both services share this network; isolated from all other Docker networks.
+
+services:
+
+  # ── Gateway ──────────────────────────────────────────────────────────────────
+  openclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        OPENCLAW_VERSION: latest
+        GOG_VERSION: "0.12.0"
+        WACLI_VERSION: "0.2.0"
+    image: openclaw:latest
+    container_name: openclaw-gateway
+
+    # ── Security ────────────────────────────────
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+
+    # ── Network ─────────────────────────────────
+    networks:
+      - openclaw-net
+
+    # ── Restart policy ──────────────────────────
+    restart: unless-stopped
+
+    # ── Port mapping ────────────────────────────
+    # Bound to 0.0.0.0 — accessible from LAN. Auth required (token).
+    ports:
+      - "9090:9090"
+
+    # ── Volumes ─────────────────────────────────
+    # ./config    → OpenClaw state dir: openclaw.json, credentials, skills, memory
+    # ./workspace → Agent workspaces (heavy I/O, separate for easy backup)
+    volumes:
+      - ./config:/data
+      - ./workspace:/data/workspace
+
+    # ── Writable temp space (required by read-only rootfs) ──────────────────
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+      - /home/node:size=256m,mode=0755,uid=1000,gid=1000
+
+    # ── Environment variables ────────────────────
+    environment:
+      OPENCLAW_STATE_DIR: /data
+      OPENCLAW_GATEWAY_PORT: "9090"
+      NODE_ENV: production
+      # Allow Node.js heap up to 1.5 GB — needed to load 13k+ credential files
+      NODE_OPTIONS: "--max-old-space-size=1536"
+      # Gateway auth token — must match gateway.auth.token in openclaw.json
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      # Google Sheets
+      GOOGLE_SHEET_ID: ${GOOGLE_SHEET_ID:-}
+      GOOGLE_SHEET_TAB: ${GOOGLE_SHEET_TAB:-WhatsApp Data}
+      GOG_ACCOUNT: ${GOG_ACCOUNT:-}
+      # ClickUp
+      CLICKUP_API_TOKEN: ${CLICKUP_API_TOKEN:-}
+      CLICKUP_LIST_ID: ${CLICKUP_LIST_ID:-}
+
+    # ── Gateway command ──────────────────────────
+    command:
+      - "--bind"
+      - "lan"          # 0.0.0.0 inside container; accessible from LAN
+      - "--port"
+      - "9090"
+      - "--auth"
+      - "trusted-proxy"
+      - "--allow-unconfigured"
+
+    # ── Resource limits ──────────────────────────
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "1.0"
+
+    # ── Health check ────────────────────────────
+    healthcheck:
+      test: ["CMD", "node", "-e",
+             "require('http').get('http://localhost:9090/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+    # ── Logging ─────────────────────────────────
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ── Studio ───────────────────────────────────────────────────────────────────
+  studio:
+    build:
+      context: ${OPENCLAW_STUDIO_DIR:-~/openclaw-studio}
+      dockerfile: Dockerfile.studio
+    image: openclaw-studio:latest
+    container_name: openclaw-studio
+
+    # ── Security ────────────────────────────────
+    user: "1000:1000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+
+    # ── Network ─────────────────────────────────
+    networks:
+      - openclaw-net
+
+    restart: unless-stopped
+
+    # ── Port mapping ────────────────────────────
+    ports:
+      - "3000:3000"
+
+    # ── Volumes ─────────────────────────────────
+    volumes:
+      - studio-data:/studio-data
+
+    # ── Writable temp space ──────────────────────
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+
+    # ── Environment variables ────────────────────
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      OPENCLAW_STATE_DIR: /studio-data
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Browser-side WSS URL — uses your domain set in DOMAIN (.env).
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-wss://${DOMAIN:-localhost}:9443}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      # Required when Studio binds to 0.0.0.0 — protects the UI
+      STUDIO_ACCESS_TOKEN: ${STUDIO_ACCESS_TOKEN:-}
+
+    # ── Wait for gateway ─────────────────────────
+    depends_on:
+      openclaw:
+        condition: service_healthy
+
+    # ── Resource limits ──────────────────────────
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+
+    # ── Health check ────────────────────────────
+    healthcheck:
+      test: ["CMD", "node", "-e",
+             "require('http').get('http://localhost:3000/', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # ── Logging ─────────────────────────────────
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ── Caddy (TLS reverse proxy) ───────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: openclaw-caddy
+    networks:
+      - openclaw-net
+    ports:
+      - "80:80"       # HTTP → HTTPS redirect
+      - "443:443"     # Studio HTTPS (standard port)
+      - "9443:9443"   # Gateway HTTPS/WSS
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./dashboard:/srv/dashboard:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      DOMAIN: ${DOMAIN}
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    depends_on:
+      - openclaw
+      - studio
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  studio-data:
+  caddy-data:
+  caddy-config:
+
+
